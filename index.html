@@ -2,104 +2,159 @@
 <html lang="zh">
 <head>
     <meta charset="UTF-8">
-    <title>P2P Desktop - Auto Deploy</title>
+    <title>Bio-Logic Fluid: Professional Desktop P2P</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/qrcode@1.4.4/build/qrcode.min.js"></script>
     <style>
-        body { margin: 0; background: #000; overflow: hidden; color: #4ade80; font-family: monospace; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'IBM Plex Mono', monospace; }
         canvas#stage { width: 100vw; height: 100vh; display: block; filter: url("#gooey"); }
-        #overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(0,0,0,0.9); z-index: 100; transition: 0.8s; }
-        .qr-card { background: #fff; padding: 20px; border-radius: 20px; }
-        #qrcode { width: 280px; height: 280px; }
-        .connected #overlay { transform: translateY(-100%); opacity: 0; }
+        
+        /* 交互遮罩层 */
+        #overlay {
+            position: fixed; inset: 0; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; background: rgba(0,0,0,0.95);
+            z-index: 100; transition: all 1.2s cubic-bezier(0.8, 0, 0.2, 1);
+        }
+        .qr-card { 
+            background: #fff; padding: 25px; border-radius: 30px; 
+            box-shadow: 0 0 50px rgba(74, 222, 128, 0.3);
+            transform: scale(1);
+        }
+        #qrcode { width: 300px; height: 300px; }
+        .status-text { color: #4ade80; margin-top: 30px; font-size: 14px; letter-spacing: 4px; font-weight: 900; text-transform: uppercase; }
+        
+        /* 连接成功后的状态 */
+        .connected #overlay { transform: translateY(-100%); opacity: 0; pointer-events: none; }
+
+        /* SVG 粘性滤镜定义 */
+        svg { width: 0; height: 0; position: absolute; }
     </style>
 </head>
 <body>
+
     <div id="overlay">
         <div class="qr-card"><canvas id="qrcode"></canvas></div>
-        <p id="status">INITIALIZING P2P...</p>
+        <div class="status-text" id="status">WAKING UP PEER...</div>
     </div>
-    <svg><filter id="gooey"><feGaussianBlur in="SourceGraphic" stdDeviation="12" result="blur" /><feColorMatrix in="blur" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 30 -14" /></filter></svg>
+
+    <svg>
+        <filter id="gooey">
+            <feGaussianBlur in="SourceGraphic" stdDeviation="12" result="blur" />
+            <feColorMatrix in="blur" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 32 -15" />
+        </filter>
+    </svg>
+
     <canvas id="stage"></canvas>
 
 <script>
+/**
+ * [CONFIG-FIRST] 
+ * 物理与美学参数映射表
+ */
 const CONFIG = {
-    u_min_size: 40,      // 最小半径
-    u_max_size: 200,     // 最大半径
-    u_base_viscosity: 0.2, // 基础灵敏度
-    u_hue_range: [180, 0] // 从青色(180)到红色(0)
+    u_min_size: 45,       // 最小半径
+    u_base_viscosity: 0.18, // 基础运动灵敏度
+    u_hue_range: [190, 0], // 色相映射：青色(190) -> 红色(0)
+    u_scale_lerp: 0.1     // 缩放平滑步长
 };
 
-// 核心：PeerJS 初始化
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d');
+let w, h;
+
+// 状态追踪
+let pointer = { x: 0, y: 0, scale: 1 };
+let follower = { x: 0, y: 0, scale: 1 };
+let isConnected = false;
+
+// 1. PeerJS P2P 连接初始化
 const peer = new Peer(); 
 
 peer.on('open', (id) => {
-    // 【关键修复】自动获取当前 Vercel 域名
-    const currentOrigin = window.location.origin; 
+    // 自动适配 Vercel 环境：定位到同目录下的 mobile.html
+    const currentOrigin = window.location.origin;
     const finalURL = `${currentOrigin}/mobile.html?peer=${id}`;
     
-    console.log("手机访问地址:", finalURL);
-    document.getElementById('status').innerText = "READY: SCAN WITH PHONE";
-
-    // 高清渲染
-    QRCode.toCanvas(document.getElementById('qrcode'), finalURL, { width: 1024 });
-    document.getElementById('qrcode').style.width = "280px";
-    document.getElementById('qrcode').style.height = "280px";
+    document.getElementById('status').innerText = "SCAN TO CONTROL";
+    
+    // 渲染超高清二维码
+    QRCode.toCanvas(document.getElementById('qrcode'), finalURL, { 
+        width: 1024, 
+        margin: 1,
+        color: { dark: "#000000", light: "#ffffff" }
+    }, (err) => {
+        const qrCanvas = document.getElementById('qrcode');
+        qrCanvas.style.width = "300px";
+        qrCanvas.style.height = "300px";
+    });
 });
 
 peer.on('connection', (conn) => {
     conn.on('data', (data) => {
-        document.body.classList.add('connected');
-        pointer.x = data.x * w; pointer.y = data.y * h; pointer.scale = data.s;
+        if(!isConnected) {
+            document.body.classList.add('connected');
+            isConnected = true;
+        }
+        // 接收归一化数据包
+        pointer.x = data.x * w;
+        pointer.y = data.y * h;
+        pointer.scale = data.s || 1;
     });
 });
 
-function init() { w = canvas.width = window.innerWidth; h = canvas.height = window.innerHeight; }
-window.onresize = init; init();
+// 2. 渲染引擎与物理映射
+function init() {
+    w = canvas.width = window.innerWidth;
+    h = canvas.height = window.innerHeight;
+    pointer.x = follower.x = w / 2;
+    pointer.y = follower.y = h / 2;
+}
+
+
 
 function render() {
     ctx.clearRect(0, 0, w, h);
 
-    // 1. 根据当前缩放比例计算目标物理特性
-    // 限制缩放范围在 0.5 到 3.0 之间
-    const clampedScale = Math.min(Math.max(follower.scale, 0.5), 3.0);
+    // 映射逻辑 A: 缩放越大大，粘度(Viscosity)越低，动作越缓慢（模拟质量感）
+    const clampedScale = Math.min(Math.max(follower.scale, 0.4), 3.5);
+    const dynamicViscosity = CONFIG.u_base_viscosity / (1 + clampedScale * 0.8);
     
-    // 动态粘度：球越大，跟随越慢 (1/scale 的反比关系)
-    const dynamicViscosity = CONFIG.u_base_viscosity / (clampedScale * 1.5);
-    
-    // 动态色相：利用插值实现颜色平滑过渡
-    const t = (clampedScale - 0.5) / 2.5; // 归一化到 0-1
+    // 映射逻辑 B: 根据缩放插值计算颜色
+    const t = (clampedScale - 0.4) / 3.1; // 归一化到 0-1
     const currentHue = CONFIG.u_hue_range[0] + (CONFIG.u_hue_range[1] - CONFIG.u_hue_range[0]) * t;
 
-    // 2. 物理平滑 (LERP)
+    // 平滑运动 (LERP)
     follower.x += (pointer.x - follower.x) * dynamicViscosity;
     follower.y += (pointer.y - follower.y) * dynamicViscosity;
-    follower.scale += (pointer.scale - follower.scale) * 0.1; // 缩放本身的平滑
+    follower.scale += (pointer.scale - follower.scale) * CONFIG.u_scale_lerp;
 
     const finalSize = CONFIG.u_min_size * follower.scale;
 
-    // 3. 绘制多层发光流体
-    ctx.shadowBlur = 30 * clampedScale;
-    ctx.shadowColor = `hsla(${currentHue}, 100%, 50%, 0.5)`;
-    
-    // 主核
+    // 绘制视觉效果
     ctx.fillStyle = `hsla(${currentHue}, 100%, 50%, 0.9)`;
+    ctx.shadowBlur = 40 * clampedScale;
+    ctx.shadowColor = `hsla(${currentHue}, 100%, 50%, 0.4)`;
+    
+    // 1. 核心球体
     ctx.beginPath();
     ctx.arc(follower.x, follower.y, finalSize, 0, Math.PI * 2);
     ctx.fill();
 
-    // 粘性拖尾：模拟由于“质量”产生的运动延迟
-    for(let i = 1; i <= 4; i++) {
-        const d = i * 0.15;
-        const lx = follower.x + (pointer.x - follower.x) * d;
-        const ly = follower.y + (pointer.y - follower.y) * d;
+    // 2. 动态粘性尾迹 (Trail)
+    for(let i = 1; i <= 3; i++) {
+        const lag = i * 0.18;
+        const lx = follower.x + (pointer.x - follower.x) * lag;
+        const ly = follower.y + (pointer.y - follower.y) * lag;
         ctx.beginPath();
-        ctx.arc(lx, ly, finalSize * (1 - d * 0.8), 0, Math.PI * 2);
+        ctx.arc(lx, ly, finalSize * (1 - lag), 0, Math.PI * 2);
         ctx.fill();
     }
 
     requestAnimationFrame(render);
 }
+
+window.addEventListener('resize', init);
+init();
 render();
 </script>
 </body>
