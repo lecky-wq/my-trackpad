@@ -23,9 +23,12 @@
     <canvas id="stage"></canvas>
 
 <script>
-const CONFIG = { u_viscosity: 0.15, u_scale_lerp: 0.1, u_base_size: 70, u_hue: 190 };
-const canvas = document.getElementById('stage'), ctx = canvas.getContext('2d');
-let w, h, pointer = { x: 0, y: 0, scale: 1 }, follower = { x: 0, y: 0, scale: 1 };
+const CONFIG = {
+    u_min_size: 40,      // 最小半径
+    u_max_size: 200,     // 最大半径
+    u_base_viscosity: 0.2, // 基础灵敏度
+    u_hue_range: [180, 0] // 从青色(180)到红色(0)
+};
 
 // 核心：PeerJS 初始化
 const peer = new Peer(); 
@@ -56,18 +59,45 @@ window.onresize = init; init();
 
 function render() {
     ctx.clearRect(0, 0, w, h);
-    follower.x += (pointer.x - follower.x) * CONFIG.u_viscosity;
-    follower.y += (pointer.y - follower.y) * CONFIG.u_viscosity;
-    follower.scale += (pointer.scale - follower.scale) * CONFIG.u_scale_lerp;
-    const size = CONFIG.u_base_size * follower.scale;
-    ctx.fillStyle = `hsla(${CONFIG.u_hue}, 100%, 50%, 0.9)`;
-    ctx.beginPath(); ctx.arc(follower.x, follower.y, size, 0, Math.PI*2); ctx.fill();
-    for(let i=1; i<3; i++) {
-        const d = i * 0.2;
+
+    // 1. 根据当前缩放比例计算目标物理特性
+    // 限制缩放范围在 0.5 到 3.0 之间
+    const clampedScale = Math.min(Math.max(follower.scale, 0.5), 3.0);
+    
+    // 动态粘度：球越大，跟随越慢 (1/scale 的反比关系)
+    const dynamicViscosity = CONFIG.u_base_viscosity / (clampedScale * 1.5);
+    
+    // 动态色相：利用插值实现颜色平滑过渡
+    const t = (clampedScale - 0.5) / 2.5; // 归一化到 0-1
+    const currentHue = CONFIG.u_hue_range[0] + (CONFIG.u_hue_range[1] - CONFIG.u_hue_range[0]) * t;
+
+    // 2. 物理平滑 (LERP)
+    follower.x += (pointer.x - follower.x) * dynamicViscosity;
+    follower.y += (pointer.y - follower.y) * dynamicViscosity;
+    follower.scale += (pointer.scale - follower.scale) * 0.1; // 缩放本身的平滑
+
+    const finalSize = CONFIG.u_min_size * follower.scale;
+
+    // 3. 绘制多层发光流体
+    ctx.shadowBlur = 30 * clampedScale;
+    ctx.shadowColor = `hsla(${currentHue}, 100%, 50%, 0.5)`;
+    
+    // 主核
+    ctx.fillStyle = `hsla(${currentHue}, 100%, 50%, 0.9)`;
+    ctx.beginPath();
+    ctx.arc(follower.x, follower.y, finalSize, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 粘性拖尾：模拟由于“质量”产生的运动延迟
+    for(let i = 1; i <= 4; i++) {
+        const d = i * 0.15;
+        const lx = follower.x + (pointer.x - follower.x) * d;
+        const ly = follower.y + (pointer.y - follower.y) * d;
         ctx.beginPath();
-        ctx.arc(follower.x + (pointer.x-follower.x)*d, follower.y + (pointer.y-follower.y)*d, size*(1-d), 0, Math.PI*2);
+        ctx.arc(lx, ly, finalSize * (1 - d * 0.8), 0, Math.PI * 2);
         ctx.fill();
     }
+
     requestAnimationFrame(render);
 }
 render();
