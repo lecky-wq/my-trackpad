@@ -2,31 +2,21 @@
 <html lang="zh">
 <head>
     <meta charset="UTF-8">
-    <title>Bio-Logic Fluid: Professional Desktop P2P</title>
+    <title>Bio-Fluid Lab: Multi-Sensory Edition</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/qrcode@1.4.4/build/qrcode.min.js"></script>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: 'IBM Plex Mono', monospace; }
         canvas#stage { width: 100vw; height: 100vh; display: block; filter: url("#gooey"); }
-        
-        /* 交互遮罩层 */
         #overlay {
             position: fixed; inset: 0; display: flex; flex-direction: column;
             align-items: center; justify-content: center; background: rgba(0,0,0,0.95);
             z-index: 100; transition: all 1.2s cubic-bezier(0.8, 0, 0.2, 1);
         }
-        .qr-card { 
-            background: #fff; padding: 25px; border-radius: 30px; 
-            box-shadow: 0 0 50px rgba(74, 222, 128, 0.3);
-            transform: scale(1);
-        }
-        #qrcode { width: 300px; height: 300px; }
+        .qr-card { background: #fff; padding: 25px; border-radius: 30px; box-shadow: 0 0 50px rgba(74, 222, 128, 0.3); }
+        #qrcode { width: 300px; height: 300px; display: block; }
         .status-text { color: #4ade80; margin-top: 30px; font-size: 14px; letter-spacing: 4px; font-weight: 900; text-transform: uppercase; }
-        
-        /* 连接成功后的状态 */
         .connected #overlay { transform: translateY(-100%); opacity: 0; pointer-events: none; }
-
-        /* SVG 粘性滤镜定义 */
         svg { width: 0; height: 0; position: absolute; }
     </style>
 </head>
@@ -47,62 +37,48 @@
     <canvas id="stage"></canvas>
 
 <script>
-/**
- * [CONFIG-FIRST] 
- * 物理与美学参数映射表
- */
 const CONFIG = {
-    u_min_size: 45,       // 最小半径
-    u_base_viscosity: 0.18, // 基础运动灵敏度
-    u_hue_range: [190, 0], // 色相映射：青色(190) -> 红色(0)
-    u_scale_lerp: 0.1     // 缩放平滑步长
+    u_min_size: 45,
+    u_base_viscosity: 0.2,
+    u_hue_range: [190, 0],
+    u_gravity_strength: 0.1, // 重力强度
+    u_friction: 0.95        // 阻力/摩擦力
 };
 
 const canvas = document.getElementById('stage');
 const ctx = canvas.getContext('2d');
 let w, h;
-
-// 状态追踪
 let pointer = { x: 0, y: 0, scale: 1 };
 let follower = { x: 0, y: 0, scale: 1 };
+let vel = { x: 0, y: 0 }; // 重力加速度产生的速度
 let isConnected = false;
 
-// 1. PeerJS P2P 连接初始化
+// 1. PeerJS 逻辑
 const peer = new Peer(); 
-
 peer.on('open', (id) => {
-    // 自动适配 Vercel 环境：定位到同目录下的 mobile.html
-    const currentOrigin = window.location.origin;
-    const finalURL = `${currentOrigin}/mobile.html?peer=${id}`;
-    
-    document.getElementById('status').innerText = "SCAN TO CONTROL";
-    
-    // 渲染超高清二维码
-    QRCode.toCanvas(document.getElementById('qrcode'), finalURL, { 
-        width: 1024, 
-        margin: 1,
-        color: { dark: "#000000", light: "#ffffff" }
-    }, (err) => {
-        const qrCanvas = document.getElementById('qrcode');
-        qrCanvas.style.width = "300px";
-        qrCanvas.style.height = "300px";
-    });
+    const finalURL = `${window.location.origin}/mobile.html?peer=${id}`;
+    document.getElementById('status').innerText = "SCAN TO CONNECT";
+    QRCode.toCanvas(document.getElementById('qrcode'), finalURL, { width: 600 });
 });
 
 peer.on('connection', (conn) => {
     conn.on('data', (data) => {
-        if(!isConnected) {
-            document.body.classList.add('connected');
-            isConnected = true;
-        }
-        // 接收归一化数据包
+        if(!isConnected) { document.body.classList.add('connected'); isConnected = true; }
+        
+        // 映射数据
         pointer.x = data.x * w;
         pointer.y = data.y * h;
         pointer.scale = data.s || 1;
+
+        // 核心：处理陀螺仪数据 (gamma为左右, beta为前后)
+        if(data.gg !== undefined) {
+            vel.x += data.gg * CONFIG.u_gravity_strength;
+            vel.y += data.gb * CONFIG.u_gravity_strength;
+        }
     });
 });
 
-// 2. 渲染引擎与物理映射
+// 2. 渲染与物理引擎
 function init() {
     w = canvas.width = window.innerWidth;
     h = canvas.height = window.innerHeight;
@@ -115,47 +91,48 @@ function init() {
 function render() {
     ctx.clearRect(0, 0, w, h);
 
-    // 映射逻辑 A: 缩放越大大，粘度(Viscosity)越低，动作越缓慢（模拟质量感）
+    // 物理：摩擦力
+    vel.x *= CONFIG.u_friction;
+    vel.y *= CONFIG.u_friction;
+
+    // 物理：根据缩放调整粘度
     const clampedScale = Math.min(Math.max(follower.scale, 0.4), 3.5);
     const dynamicViscosity = CONFIG.u_base_viscosity / (1 + clampedScale * 0.8);
-    
-    // 映射逻辑 B: 根据缩放插值计算颜色
-    const t = (clampedScale - 0.4) / 3.1; // 归一化到 0-1
+    const t = (clampedScale - 0.4) / 3.1;
     const currentHue = CONFIG.u_hue_range[0] + (CONFIG.u_hue_range[1] - CONFIG.u_hue_range[0]) * t;
 
-    // 平滑运动 (LERP)
-    follower.x += (pointer.x - follower.x) * dynamicViscosity;
-    follower.y += (pointer.y - follower.y) * dynamicViscosity;
-    follower.scale += (pointer.scale - follower.scale) * CONFIG.u_scale_lerp;
+    // 物理：合成运动 (手指跟随 + 重力惯性)
+    follower.x += (pointer.x + vel.x - follower.x) * dynamicViscosity;
+    follower.y += (pointer.y + vel.y - follower.y) * dynamicViscosity;
+    follower.scale += (pointer.scale - follower.scale) * 0.1;
+
+    // 边界碰撞弹回
+    if (follower.x < 0 || follower.x > w) vel.x *= -0.8;
+    if (follower.y < 0 || follower.y > h) vel.y *= -0.8;
 
     const finalSize = CONFIG.u_min_size * follower.scale;
 
-    // 绘制视觉效果
+    // 绘图
     ctx.fillStyle = `hsla(${currentHue}, 100%, 50%, 0.9)`;
     ctx.shadowBlur = 40 * clampedScale;
     ctx.shadowColor = `hsla(${currentHue}, 100%, 50%, 0.4)`;
     
-    // 1. 核心球体
     ctx.beginPath();
     ctx.arc(follower.x, follower.y, finalSize, 0, Math.PI * 2);
     ctx.fill();
 
-    // 2. 动态粘性尾迹 (Trail)
+    // 粘性拖尾
     for(let i = 1; i <= 3; i++) {
-        const lag = i * 0.18;
-        const lx = follower.x + (pointer.x - follower.x) * lag;
-        const ly = follower.y + (pointer.y - follower.y) * lag;
+        const d = i * 0.15;
         ctx.beginPath();
-        ctx.arc(lx, ly, finalSize * (1 - lag), 0, Math.PI * 2);
+        ctx.arc(follower.x + (pointer.x-follower.x)*d, follower.y + (pointer.y-follower.y)*d, finalSize*(1-d), 0, Math.PI*2);
         ctx.fill();
     }
-
     requestAnimationFrame(render);
 }
 
 window.addEventListener('resize', init);
-init();
-render();
+init(); render();
 </script>
 </body>
 </html>

@@ -3,19 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Haptic Trackpad Pro</title>
+    <title>Bio-Controller</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        body { margin: 0; background: #000; color: #4ade80; overflow: hidden; touch-action: none; font-family: monospace; }
-        #pad { width: 100vw; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 4px solid #111; position: relative; }
-        #vibe-dot { position: absolute; width: 60px; height: 60px; border: 2px solid #4ade80; border-radius: 50%; pointer-events: none; opacity: 0; transform: translate(-50%, -50%); transition: opacity 0.2s; }
-        .status { font-size: 10px; letter-spacing: 2px; position: absolute; bottom: 40px; }
+        body { margin: 0; background: #050505; color: #4ade80; overflow: hidden; touch-action: none; font-family: monospace; }
+        #pad { width: 100vw; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; }
+        #btn-gyro { padding: 15px 30px; background: #4ade80; color: #000; border: none; border-radius: 50px; font-weight: 900; z-index: 100; cursor: pointer; }
+        #vibe-dot { position: absolute; width: 60px; height: 60px; border: 2px solid #4ade80; border-radius: 50%; pointer-events: none; opacity: 0; transform: translate(-50%, -50%); }
+        .status { position: absolute; bottom: 30px; font-size: 10px; opacity: 0.6; }
     </style>
 </head>
 <body>
     <div id="pad">
+        <button id="btn-gyro">开启感应控制</button>
         <div id="vibe-dot"></div>
-        <div class="status" id="stat">WAITING FOR PEER...</div>
+        <div class="status" id="stat">CONNECTING P2P...</div>
     </div>
 
 <script>
@@ -23,68 +25,61 @@
     const dot = document.getElementById('vibe-dot');
     const peer = new Peer();
     const targetID = new URLSearchParams(window.location.search).get('peer');
-    let conn = null, initialDist = 0, currentScale = 1, lastHapticScale = 1;
+    let conn = null, initialDist = 0, currentScale = 1;
+    let gyro = { b: 0, g: 0 };
 
+    // 1. P2P 连接
     peer.on('open', () => {
         if(targetID) {
             conn = peer.connect(targetID);
-            conn.on('open', () => stat.innerText = "CONNECTED | HAPTICS ACTIVE");
+            conn.on('open', () => stat.innerText = "READY: TOUCH & TILT");
         }
     });
 
-    const getDist = (t1, t2) => Math.hypot(t2.pageX - t1.pageX, t2.pageY - t1.pageY);
-
-    // 触觉反馈引擎
-    const triggerHaptic = (type) => {
-        if (!window.navigator.vibrate) return;
-        if (type === 'tick') window.navigator.vibrate(12); // 轻微刻度感
-        if (type === 'limit') window.navigator.vibrate([30, 50, 30]); // 边界警告感
+    // 2. 权限请求与重力感应
+    document.getElementById('btn-gyro').onclick = async () => {
+        if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+            const res = await DeviceOrientationEvent.requestPermission();
+            if (res !== 'granted') return;
+        }
+        window.addEventListener('deviceorientation', (e) => {
+            gyro.b = e.beta; // 前后
+            gyro.g = e.gamma; // 左右
+        });
+        document.getElementById('btn-gyro').style.display = 'none';
     };
 
-    window.addEventListener('touchstart', (e) => {
-        if (e.touches.length === 2) initialDist = getDist(e.touches[0], e.touches[1]);
-        dot.style.opacity = "1";
-    });
+    const getDist = (t1, t2) => Math.hypot(t2.pageX - t1.pageX, t2.pageY - t1.pageY);
+    const triggerHaptic = (ms) => navigator.vibrate && navigator.vibrate(ms);
 
+    // 3. 交互发送逻辑
     window.addEventListener('touchmove', (e) => {
         if (!conn || !conn.open) return;
         e.preventDefault();
-        const t1 = e.touches[0];
+        const t = e.touches[0];
         
-        // 缩放计算
         if (e.touches.length === 2) {
-            const newDist = getDist(e.touches[0], e.touches[1]);
-            currentScale = newDist / initialDist;
-
-            // 1. 刻度感触发：每变化 0.2 缩放产生一次震动
-            if (Math.abs(currentScale - lastHapticScale) > 0.2) {
-                triggerHaptic('tick');
-                lastHapticScale = currentScale;
-            }
-
-            // 2. 极限反馈：大于 3 倍或小于 0.5 倍
-            if (currentScale > 3.0 || currentScale < 0.5) {
-                triggerHaptic('limit');
-            }
+            if (initialDist === 0) initialDist = getDist(e.touches[0], e.touches[1]);
+            const newScale = getDist(e.touches[0], e.touches[1]) / initialDist;
+            if (Math.abs(newScale - currentScale) > 0.1) triggerHaptic(10); // 刻度震动
+            currentScale = newScale;
         }
 
-        // 发送数据
-        conn.send({ 
-            x: t1.pageX / window.innerWidth, 
-            y: t1.pageY / window.innerHeight, 
-            s: currentScale 
+        conn.send({
+            x: t.pageX / window.innerWidth,
+            y: t.pageY / window.innerHeight,
+            s: currentScale,
+            gb: gyro.b,
+            gg: gyro.g
         });
 
-        // 视觉跟随
-        dot.style.left = t1.pageX + 'px';
-        dot.style.top = t1.pageY + 'px';
+        dot.style.opacity = 1;
+        dot.style.left = t.pageX + 'px';
+        dot.style.top = t.pageY + 'px';
         dot.style.transform = `translate(-50%, -50%) scale(${currentScale})`;
     });
 
-    window.addEventListener('touchend', () => {
-        dot.style.opacity = "0";
-        initialDist = 0;
-    });
+    window.addEventListener('touchend', () => { initialDist = 0; dot.style.opacity = 0; });
 </script>
 </body>
 </html>
