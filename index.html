@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>P2P Remote Fluid Lab</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.4.4/build/qrcode.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
+        canvas#stage { width: 100vw; height: 100vh; display: block; filter: url("#gooey"); }
+        #overlay {
+            position: fixed; inset: 0; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; background: rgba(0,0,0,0.9);
+            z-index: 100; transition: transform 0.8s cubic-bezier(0.8,0,0.2,1);
+        }
+        .qr-card { background: #fff; padding: 25px; border-radius: 25px; }
+        #qrcode { width: 280px; height: 280px; }
+        .msg { color: #4ade80; margin-top: 25px; font-weight: 900; letter-spacing: 2px; text-align: center; }
+        .connected #overlay { transform: translateY(-100%); }
+        svg { width: 0; height: 0; position: absolute; }
+    </style>
+</head>
+<body>
+
+    <div id="overlay">
+        <div class="qr-card"><canvas id="qrcode"></canvas></div>
+        <div class="msg" id="status">INITIALIZING P2P...</div>
+    </div>
+
+    <svg><filter id="gooey"><feGaussianBlur in="SourceGraphic" stdDeviation="12" result="blur" /><feColorMatrix in="blur" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 30 -14" /></filter></svg>
+    <canvas id="stage"></canvas>
+
+<script>
+const CONFIG = { u_viscosity: 0.15, u_scale_lerp: 0.1, u_base_size: 70, u_hue: 190 };
+let w, h, pointer = { x: 0, y: 0, scale: 1 }, follower = { x: 0, y: 0, scale: 1 };
+const canvas = document.getElementById('stage'), ctx = canvas.getContext('2d');
+
+// 1. 初始化 PeerJS (电脑端作为 Receiver)
+const peer = new Peer(); 
+
+peer.on('open', (id) => {
+    document.getElementById('status').innerText = "SCAN TO CONNECT REMOTE";
+    // 构建手机端 URL (你需要将手机代码部署到公网，如 Vercel/GitHub Pages)
+    // 这里假设你的手机页面 URL 是 https://your-app.vercel.app/mobile.html
+    const mobileBaseURL = "https://your-mobile-page-url.com/mobile.html"; 
+    const finalURL = `${mobileBaseURL}?peer=${id}`;
+
+    QRCode.toCanvas(document.getElementById('qrcode'), finalURL, { width: 1024 });
+    document.getElementById('qrcode').style.width = "280px";
+    document.getElementById('qrcode').style.height = "280px";
+});
+
+peer.on('connection', (conn) => {
+    conn.on('data', (data) => {
+        document.body.classList.add('connected');
+        pointer.x = data.x * w;
+        pointer.y = data.y * h;
+        pointer.scale = data.s;
+    });
+});
+
+// 2. 物理渲染引擎
+function init() { w = canvas.width = window.innerWidth; h = canvas.height = window.innerHeight; }
+window.onresize = init; init();
+
+
+
+function render() {
+    ctx.clearRect(0, 0, w, h);
+    follower.x += (pointer.x - follower.x) * CONFIG.u_viscosity;
+    follower.y += (pointer.y - follower.y) * CONFIG.u_viscosity;
+    follower.scale += (pointer.scale - follower.scale) * CONFIG.u_scale_lerp;
+
+    const size = CONFIG.u_base_size * follower.scale;
+    ctx.fillStyle = `hsla(${CONFIG.u_hue}, 100%, 50%, 0.9)`;
+    ctx.beginPath(); ctx.arc(follower.x, follower.y, size, 0, Math.PI*2); ctx.fill();
+
+    for(let i=1; i<3; i++) {
+        const d = i * 0.2;
+        ctx.beginPath();
+        ctx.arc(follower.x + (pointer.x-follower.x)*d, follower.y + (pointer.y-follower.y)*d, size*(1-d), 0, Math.PI*2);
+        ctx.fill();
+    }
+    requestAnimationFrame(render);
+}
+render();
+</script>
+</body>
+</html>
