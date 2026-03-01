@@ -3,41 +3,88 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>P2P Trackpad</title>
+    <title>Haptic Trackpad Pro</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        body { margin: 0; background: #050505; color: #4ade80; overflow: hidden; touch-action: none; font-family: monospace; text-align: center; }
-        #pad { width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; border: 4px solid #111; box-sizing: border-box; }
+        body { margin: 0; background: #000; color: #4ade80; overflow: hidden; touch-action: none; font-family: monospace; }
+        #pad { width: 100vw; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 4px solid #111; position: relative; }
+        #vibe-dot { position: absolute; width: 60px; height: 60px; border: 2px solid #4ade80; border-radius: 50%; pointer-events: none; opacity: 0; transform: translate(-50%, -50%); transition: opacity 0.2s; }
+        .status { font-size: 10px; letter-spacing: 2px; position: absolute; bottom: 40px; }
     </style>
 </head>
 <body>
-    <div id="pad"><div id="stat">CONNECTING...</div></div>
+    <div id="pad">
+        <div id="vibe-dot"></div>
+        <div class="status" id="stat">WAITING FOR PEER...</div>
+    </div>
+
 <script>
     const stat = document.getElementById('stat');
+    const dot = document.getElementById('vibe-dot');
     const peer = new Peer();
     const targetID = new URLSearchParams(window.location.search).get('peer');
-    let conn = null, initialDist = 0, currentScale = 1;
+    let conn = null, initialDist = 0, currentScale = 1, lastHapticScale = 1;
 
     peer.on('open', () => {
         if(targetID) {
             conn = peer.connect(targetID);
-            conn.on('open', () => stat.innerText = "CONNECTED! SLIDE & PINCH");
+            conn.on('open', () => stat.innerText = "CONNECTED | HAPTICS ACTIVE");
         }
     });
 
     const getDist = (t1, t2) => Math.hypot(t2.pageX - t1.pageX, t2.pageY - t1.pageY);
 
+    // 触觉反馈引擎
+    const triggerHaptic = (type) => {
+        if (!window.navigator.vibrate) return;
+        if (type === 'tick') window.navigator.vibrate(12); // 轻微刻度感
+        if (type === 'limit') window.navigator.vibrate([30, 50, 30]); // 边界警告感
+    };
+
+    window.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 2) initialDist = getDist(e.touches[0], e.touches[1]);
+        dot.style.opacity = "1";
+    });
+
     window.addEventListener('touchmove', (e) => {
         if (!conn || !conn.open) return;
         e.preventDefault();
         const t1 = e.touches[0];
+        
+        // 缩放计算
         if (e.touches.length === 2) {
-            if (initialDist === 0) initialDist = getDist(e.touches[0], e.touches[1]);
-            currentScale = getDist(e.touches[0], e.touches[1]) / initialDist;
+            const newDist = getDist(e.touches[0], e.touches[1]);
+            currentScale = newDist / initialDist;
+
+            // 1. 刻度感触发：每变化 0.2 缩放产生一次震动
+            if (Math.abs(currentScale - lastHapticScale) > 0.2) {
+                triggerHaptic('tick');
+                lastHapticScale = currentScale;
+            }
+
+            // 2. 极限反馈：大于 3 倍或小于 0.5 倍
+            if (currentScale > 3.0 || currentScale < 0.5) {
+                triggerHaptic('limit');
+            }
         }
-        conn.send({ x: t1.pageX / window.innerWidth, y: t1.pageY / window.innerHeight, s: currentScale });
+
+        // 发送数据
+        conn.send({ 
+            x: t1.pageX / window.innerWidth, 
+            y: t1.pageY / window.innerHeight, 
+            s: currentScale 
+        });
+
+        // 视觉跟随
+        dot.style.left = t1.pageX + 'px';
+        dot.style.top = t1.pageY + 'px';
+        dot.style.transform = `translate(-50%, -50%) scale(${currentScale})`;
     });
-    window.addEventListener('touchstart', (e) => { if(e.touches.length < 2) initialDist = 0; });
+
+    window.addEventListener('touchend', () => {
+        dot.style.opacity = "0";
+        initialDist = 0;
+    });
 </script>
 </body>
 </html>
